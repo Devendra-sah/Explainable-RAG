@@ -1,0 +1,22 @@
+[
+  {
+    "query": "What is database normalization?",
+    "relevant_chunk_ids": []
+  },
+  {
+    "query": "Explain First Normal Form (1NF).",
+    "relevant_chunk_ids": []
+  },
+  {
+    "query": "What is the difference between First Normal Form and Third Normal Form?",
+    "relevant_chunk_ids": []
+  },
+  {
+    "query": "What is database indexing?",
+    "relevant_chunk_ids": []
+  },
+  {
+    "query": "Explain vector databases and semantic search.",
+    "relevant_chunk_ids": []
+  }
+]
