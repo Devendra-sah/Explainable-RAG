@@ -1,9 +1,5 @@
 from pathlib import Path
 
-from pypdf import PdfReader
-from docx import Document
-
-
 class DocumentExtractor:
 
     def extract(self, file_path: str):
@@ -37,6 +33,7 @@ class DocumentExtractor:
     # ==================================================
 
     def _extract_pdf(self, path: Path):
+        from pypdf import PdfReader
 
         reader = PdfReader(str(path))
 
@@ -66,6 +63,7 @@ class DocumentExtractor:
     # ==================================================
 
     def _extract_docx(self, path: Path):
+        from docx import Document
 
         document = Document(str(path))
 

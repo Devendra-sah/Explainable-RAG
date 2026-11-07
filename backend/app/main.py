@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -234,23 +235,32 @@ def me(user: dict = Depends(current_user)):
 
 
 @app.get("/api/documents")
-def list_documents(user: dict = Depends(current_user)):
+def list_documents(conversation_id: int | None = None, user: dict = Depends(current_user)):
     with db() as connection, connection.cursor() as cursor:
+        if conversation_id is None:
+            return {"documents": []}
+        owned_conversation(cursor, conversation_id, user["user_id"])
         cursor.execute(
             """
             SELECT d.document_id, d.title, d.file_name, d.file_type, d.created_at,
                    COUNT(DISTINCT c.chunk_id) AS chunk_count
-            FROM documents d LEFT JOIN chunks c ON c.document_id = d.document_id
-            WHERE d.user_id = %s
+            FROM documents d
+            JOIN conversation_documents cd ON cd.document_id = d.document_id
+            LEFT JOIN chunks c ON c.document_id = d.document_id
+            WHERE d.user_id = %s AND cd.conversation_id = %s
             GROUP BY d.document_id ORDER BY d.created_at DESC
             """,
-            (user["user_id"],),
+            (user["user_id"], conversation_id),
         )
         return {"documents": cursor.fetchall()}
 
 
 @app.post("/api/documents/upload")
-async def upload_document(file: UploadFile = File(...), user: dict = Depends(current_user)):
+async def upload_document(
+    file: UploadFile = File(...),
+    conversation_id: int | None = None,
+    user: dict = Depends(current_user),
+):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in {".pdf", ".docx", ".txt"}:
         raise HTTPException(status_code=415, detail="Only PDF, DOCX, and TXT files are supported.")
@@ -261,11 +271,31 @@ async def upload_document(file: UploadFile = File(...), user: dict = Depends(cur
         raise HTTPException(status_code=413, detail="File exceeds 20 MB limit.")
     tmp_path = None
     try:
+        with db() as connection, connection.cursor() as cursor:
+            if conversation_id is None:
+                cursor.execute(
+                    "INSERT INTO conversations (user_id, title) VALUES (%s, %s) RETURNING conversation_id",
+                    (user["user_id"], "New conversation"),
+                )
+                conversation_id = cursor.fetchone()["conversation_id"]
+            else:
+                owned_conversation(cursor, conversation_id, user["user_id"])
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             tmp.write(content)
             tmp_path = tmp.name
-        result = DocumentIngestionService(DATABASE_URL).ingest_document(tmp_path, user["user_id"])
-        return {"ok": True, "file_name": file.filename, "status": "indexed", "result": result}
+        result = DocumentIngestionService(DATABASE_URL).ingest_document(
+            tmp_path,
+            user["user_id"],
+            conversation_id,
+            file.filename,
+        )
+        return {
+            "ok": True,
+            "file_name": file.filename,
+            "status": "indexed",
+            "conversation_id": conversation_id,
+            "result": result,
+        }
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
@@ -353,6 +383,20 @@ def get_conversation(conversation_id: int, user: dict = Depends(current_user)):
         conversation = owned_conversation(cursor, conversation_id, user["user_id"])
         cursor.execute("SELECT message_id, role, content, metadata, created_at FROM messages WHERE conversation_id = %s AND user_id = %s ORDER BY created_at", (conversation_id, user["user_id"]))
         conversation["messages"] = cursor.fetchall()
+        cursor.execute(
+            """
+            SELECT d.document_id, d.title, d.file_name, d.file_type, d.created_at,
+                   COUNT(DISTINCT c.chunk_id) AS chunk_count
+            FROM conversation_documents cd
+            JOIN documents d ON d.document_id = cd.document_id
+            LEFT JOIN chunks c ON c.document_id = d.document_id
+            WHERE cd.conversation_id = %s AND d.user_id = %s
+            GROUP BY d.document_id
+            ORDER BY d.created_at
+            """,
+            (conversation_id, user["user_id"]),
+        )
+        conversation["documents"] = cursor.fetchall()
         return {"conversation": conversation}
 
 
@@ -374,6 +418,11 @@ def delete_conversation(conversation_id: int, user: dict = Depends(current_user)
 
 @app.post("/api/chat")
 def chat(request: ChatRequest, user: dict = Depends(current_user)):
+    normalized_question = request.question.strip()
+    is_greeting = re.fullmatch(
+        r"(hi|hii|hlo|hello|hey|good morning|good afternoon|good evening)[!.?,\s]*",
+        normalized_question.casefold(),
+    )
     with db() as connection, connection.cursor() as cursor:
         if request.conversation_id is None:
             cursor.execute("INSERT INTO conversations (user_id, title) VALUES (%s, %s) RETURNING conversation_id", (user["user_id"], request.question[:80]))
@@ -381,13 +430,34 @@ def chat(request: ChatRequest, user: dict = Depends(current_user)):
         else:
             owned_conversation(cursor, request.conversation_id, user["user_id"])
             conversation_id = request.conversation_id
-        cursor.execute("INSERT INTO messages (conversation_id, user_id, role, content) VALUES (%s, %s, 'user', %s)", (conversation_id, user["user_id"], request.question.strip()))
+        if not is_greeting:
+            cursor.execute(
+                "UPDATE conversations SET title = %s WHERE conversation_id = %s AND user_id = %s AND title = 'New conversation'",
+                (normalized_question[:80], conversation_id, user["user_id"]),
+            )
+        cursor.execute("INSERT INTO messages (conversation_id, user_id, role, content) VALUES (%s, %s, 'user', %s)", (conversation_id, user["user_id"], normalized_question))
+    if is_greeting:
+        greeting = "Hello! I’m ready to help you explore the documents in this conversation. Ask me a question whenever you’re ready."
+        with db() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO messages (conversation_id, user_id, role, content) VALUES (%s, %s, 'assistant', %s)",
+                (conversation_id, user["user_id"], greeting),
+            )
+        return {"answer": greeting, "conversation_id": conversation_id, "sources": [], "explanations": []}
     try:
         result = RAGService(DATABASE_URL).generate_answer(request.question.strip(), request.top_k, user["user_id"], conversation_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    explanations = (
+        ExplainabilityService(DATABASE_URL).explain_query(result["query_id"])
+        if result.get("query_id") and result.get("sources")
+        else []
+    )
+    explanations = json.loads(json.dumps(explanations, default=float))
+    result["explanations"] = explanations
     metadata = {
         "sources": result.get("sources", []),
+        "explanations": explanations,
         "retrieval": result.get("retrieval", {}),
         "citation_validation": result.get("citation_validation"),
         "claim_verification": result.get("claim_verification"),

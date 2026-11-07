@@ -4,7 +4,6 @@ import re
 import time
 
 import psycopg
-from groq import Groq
 
 from app.services.retrieval_service import RetrievalService
 from app.services.context_builder import ContextBuilder
@@ -45,6 +44,8 @@ class RAGService:
             raise ValueError("RAG_MIN_SIMILARITY must be between 0 and 1.")
 
         self.min_similarity = configured_threshold
+        from groq import Groq
+
         self.client = Groq(api_key=api_key)
         self.retrieval_service = RetrievalService(database_url)
         self.context_builder = ContextBuilder()
@@ -374,7 +375,10 @@ class RAGService:
                             sources=sources,
                         )
 
-                        if second_verification.get("grounding_valid", False):
+                        if second_verification.get("grounding_status") in {
+                            "verified",
+                            "partially_supported",
+                        }:
                             answer_text = repaired_citations["answer"]
                             citation_valid = True
                             citation_errors = []
@@ -382,14 +386,16 @@ class RAGService:
                         else:
                             # Preserve the final failed verification for audit.
                             claim_verification = second_verification
-                            answer_text = self.ABSTENTION_MESSAGE
-                            abstained = True
+                            if first_verification.get("grounding_status") != "partially_supported":
+                                answer_text = self.ABSTENTION_MESSAGE
+                                abstained = True
                     else:
                         claim_verification = first_verification
-                        answer_text = self.ABSTENTION_MESSAGE
-                        abstained = True
-                        citation_valid = False
-                        citation_errors.extend(repaired_citations["errors"])
+                        if first_verification.get("grounding_status") != "partially_supported":
+                            answer_text = self.ABSTENTION_MESSAGE
+                            abstained = True
+                            citation_valid = False
+                            citation_errors.extend(repaired_citations["errors"])
 
             except Exception as exc:
                 claim_verification = {

@@ -49,6 +49,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_conversation_created
     ON messages(conversation_id, created_at);
 
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS user_id BIGINT;
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS conversation_id BIGINT;
 ALTER TABLE documents DROP CONSTRAINT IF EXISTS documents_file_hash_key;
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_documents_user') THEN
@@ -60,6 +61,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_user_hash
     ON documents(user_id, file_hash) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_documents_user_created
     ON documents(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_documents_conversation
+    ON documents(conversation_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS conversation_documents (
+    conversation_id BIGINT NOT NULL REFERENCES conversations(conversation_id) ON DELETE CASCADE,
+    document_id BIGINT NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (conversation_id, document_id)
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_documents_document
+    ON conversation_documents(document_id);
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_documents_conversation') THEN
+        ALTER TABLE documents ADD CONSTRAINT fk_documents_conversation
+            FOREIGN KEY (conversation_id) REFERENCES conversations(conversation_id) ON DELETE CASCADE;
+    END IF;
+END $$;
 
 ALTER TABLE queries ADD COLUMN IF NOT EXISTS user_id BIGINT;
 ALTER TABLE queries ADD COLUMN IF NOT EXISTS conversation_id BIGINT;

@@ -31,7 +31,13 @@ class DocumentIngestionService:
     # PUBLIC METHOD
     # ==================================================
 
-    def ingest_document(self, file_path: str, user_id: int | None = None):
+    def ingest_document(
+        self,
+        file_path: str,
+        user_id: int | None = None,
+        conversation_id: int | None = None,
+        original_file_name: str | None = None,
+    ):
 
         start_time = time.perf_counter()
 
@@ -76,9 +82,30 @@ class DocumentIngestionService:
                 existing_document["document_id"]
             )
 
+            if conversation_id is not None:
+                with psycopg.connect(self.database_url) as connection, connection.cursor() as cursor:
+                    if original_file_name:
+                        cursor.execute(
+                            "UPDATE documents SET file_name = %s WHERE document_id = %s",
+                            (original_file_name, existing_document["document_id"]),
+                        )
+                    cursor.execute(
+                        """
+                        INSERT INTO conversation_documents (conversation_id, document_id)
+                        VALUES (%s, %s)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (conversation_id, existing_document["document_id"]),
+                    )
+            elif original_file_name:
+                with psycopg.connect(self.database_url) as connection, connection.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE documents SET file_name = %s WHERE document_id = %s",
+                        (original_file_name, existing_document["document_id"]),
+                    )
             return {
                 "document_id": existing_document["document_id"],
-                "file_name": existing_document["file_name"],
+                "file_name": original_file_name or existing_document["file_name"],
                 "file_type": existing_document["file_type"],
                 "file_hash": existing_document["file_hash"],
                 "chunk_count": existing_document["chunk_count"],
@@ -138,12 +165,22 @@ class DocumentIngestionService:
                     document_id = self._insert_document(
                         cursor=cursor,
                         title=path.stem,
-                        file_name=path.name,
+                        file_name=original_file_name or path.name,
                         file_type=file_type,
                         file_hash=file_hash,
                         file_size=file_size,
-                        user_id=user_id
+                        user_id=user_id,
+                        conversation_id=conversation_id
                     )
+                    if conversation_id is not None:
+                        cursor.execute(
+                            """
+                            INSERT INTO conversation_documents (conversation_id, document_id)
+                            VALUES (%s, %s)
+                            ON CONFLICT DO NOTHING
+                            """,
+                            (conversation_id, document_id),
+                        )
 
                     print(
                         "Document ID:",
@@ -380,7 +417,8 @@ class DocumentIngestionService:
         file_type,
         file_hash,
         file_size,
-        user_id
+        user_id,
+        conversation_id
     ):
 
         query = """
@@ -390,9 +428,11 @@ class DocumentIngestionService:
                 file_type,
                 file_hash,
                 file_size_bytes,
-                user_id
+                user_id,
+                conversation_id
             )
             VALUES (
+                %s,
                 %s,
                 %s,
                 %s,
@@ -411,7 +451,8 @@ class DocumentIngestionService:
                 file_type,
                 file_hash,
                 file_size,
-                user_id
+                user_id,
+                conversation_id
             )
         )
 

@@ -1,4 +1,3 @@
-from transformers import AutoTokenizer
 import re
 
 
@@ -16,8 +15,7 @@ class ChunkingService:
         self.overlap_tokens = overlap_tokens
         self.max_tokens = max_tokens
 
-        print(f"Loading tokenizer: {model_name}")
-
+        from transformers import AutoTokenizer
         self.tokenizer = AutoTokenizer.from_pretrained(
             model_name
         )

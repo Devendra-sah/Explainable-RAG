@@ -56,10 +56,22 @@ class RetrievalService:
                 # Store query
                 # ======================================
 
-                ownership_clause = "WHERE d.user_id = %s" if user_id is not None else ""
+                ownership_filters = []
                 retrieval_params = [vector_string]
                 if user_id is not None:
+                    ownership_filters.append("d.user_id = %s")
                     retrieval_params.append(user_id)
+                if conversation_id is not None:
+                    ownership_filters.append(
+                        "EXISTS (SELECT 1 FROM conversation_documents cd "
+                        "WHERE cd.document_id = d.document_id "
+                        "AND cd.conversation_id = %s)"
+                    )
+                    retrieval_params.append(conversation_id)
+                ownership_clause = (
+                    "WHERE " + " AND ".join(ownership_filters)
+                    if ownership_filters else ""
+                )
                 retrieval_params.extend([vector_string, top_k])
                 cursor.execute(
                     f"""

@@ -3,9 +3,6 @@ import os
 import re
 import unicodedata
 
-from groq import Groq
-
-
 class ClaimVerificationService:
     """Verify individual answer claims against retrieved source text."""
 
@@ -29,6 +26,8 @@ class ClaimVerificationService:
             "GROQ_MODEL",
             "openai/gpt-oss-120b",
         )
+        from groq import Groq
+
         self.client = Groq(api_key=api_key)
 
     @staticmethod
