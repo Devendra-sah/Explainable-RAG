@@ -28,6 +28,7 @@ load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 SESSION_COOKIE = "explainable_rag_session"
 SESSION_DAYS = 7
+SESSION_COOKIE_PATH = "/"
 LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 
 app = FastAPI(
@@ -106,6 +107,10 @@ def token_digest(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def session_cookie_samesite(secure: bool) -> str:
+    return "None" if secure else "Lax"
+
+
 def issue_session(response: Response, user_id: int, secure: bool) -> None:
     token = secrets.token_urlsafe(48)
     expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)
@@ -120,8 +125,8 @@ def issue_session(response: Response, user_id: int, secure: bool) -> None:
         max_age=SESSION_DAYS * 86400,
         httponly=True,
         secure=secure,
-        samesite="lax",
-        path="/",
+        samesite=session_cookie_samesite(secure),
+        path=SESSION_COOKIE_PATH,
     )
 
 
@@ -221,11 +226,22 @@ def login(request: LoginRequest, response: Response, http_request: Request):
 
 
 @app.post("/api/auth/logout")
-def logout(response: Response, session: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
+def logout(
+    response: Response,
+    http_request: Request,
+    session: str | None = Cookie(default=None, alias=SESSION_COOKIE),
+):
     if session:
         with db() as connection, connection.cursor() as cursor:
             cursor.execute("DELETE FROM auth_sessions WHERE token_hash = %s", (token_digest(session),))
-    response.delete_cookie(SESSION_COOKIE, path="/")
+    secure = http_request.url.scheme == "https"
+    response.delete_cookie(
+        SESSION_COOKIE,
+        path=SESSION_COOKIE_PATH,
+        secure=secure,
+        httponly=True,
+        samesite=session_cookie_samesite(secure),
+    )
     return {"ok": True}
 
 
